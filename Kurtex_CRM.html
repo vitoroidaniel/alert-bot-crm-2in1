@@ -1,0 +1,1076 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Kurtex Alert Bot — CRM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800;900&family=Nunito+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/lucide@0.344.0/dist/umd/lucide.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Nunito Sans',sans-serif;min-height:100vh;transition:background .25s,color .25s}
+h1,h2,.syne{font-family:'Nunito',sans-serif}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#d1d5db;border-radius:99px}
+@keyframes pulse-ring{0%{box-shadow:0 0 0 0 currentColor}70%{box-shadow:0 0 0 6px transparent}100%{box-shadow:0 0 0 0 transparent}}
+.live-dot{animation:pulse-ring 2s ease infinite}
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.fade-up{animation:fadeUp .35s ease both}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+// ── TWEAK DEFAULTS ───────────────────────────────────────────────
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "accent": "darkblue",
+  "cardStyle": "elevated",
+  "darkMode": false,
+  "navStyle": "sidebar"
+}/*EDITMODE-END*/;
+
+// ── ACCENT THEMES ────────────────────────────────────────────────
+const THEMES = {
+  violet:    { primary:'#7C3AED', primaryDark:'#6D28D9', secondary:'#1D4ED8', secondaryDark:'#1e40af', tertiary:'#047857', tertiaryDark:'#065f46' },
+  darkblue:  { primary:'#1D4ED8', primaryDark:'#1e40af', secondary:'#7C3AED', secondaryDark:'#6D28D9', tertiary:'#047857', tertiaryDark:'#065f46' },
+  darkgreen: { primary:'#047857', primaryDark:'#065f46', secondary:'#1D4ED8', secondaryDark:'#1e40af', tertiary:'#7C3AED', tertiaryDark:'#6D28D9' },
+};
+
+// ── DARK PALETTE HELPER ──────────────────────────────────────────
+function getPalette(dark){
+  return dark ? {
+    pageBg:'#0e1117', cardBg:'#161c2a', border:'#1e2a3a', borderMed:'#232f42',
+    text:'#e4eaf5', textMuted:'#8893a6', textFaint:'#4a5568',
+    inputBg:'#111827', navBg:'#111827', topBarBg:'#111827',
+    hoverBg:'#1a2336', tableHead:'#111827', tableRowHover:'#1a2336',
+    scrollThumb:'#2d3f56',
+  } : {
+    pageBg:'#e8ecf4', cardBg:'#eef1f8', border:'#dde2ef', borderMed:'#d4d9e8',
+    text:'#1a1d26', textMuted:'#5c6680', textFaint:'#8892aa',
+    inputBg:'#e2e6f0', navBg:'#eef1f8', topBarBg:'#eef1f8',
+    hoverBg:'#e4e8f2', tableHead:'#e8ecf4', tableRowHover:'#e4e8f2',
+    scrollThumb:'#c4cad8',
+  };
+}
+
+// helpers: accent bg/text adapt to dark mode
+function accentBg(theme, dark, which='primary'){
+  const c = which==='primary'?theme.primary : which==='secondary'?theme.secondary : theme.tertiary;
+  return dark ? c+'28' : c+'18';
+}
+function accentText(theme, which='primary'){
+  return which==='primary'?theme.primary : which==='secondary'?theme.secondary : theme.tertiary;
+}
+
+// ── CONFIG ───────────────────────────────────────────────────────
+// Set these before deploying — no other changes needed
+const API_URL     = window.KURTEX_API_URL  || 'https://kurtex-alert-bot-production.up.railway.app';
+const BOT_USERNAME = window.KURTEX_BOT_USERNAME || 'kurtexalertsbot'; // without @
+
+// ── DATA ──────────────────────────────────────────────────────────
+const TRIGGERS = ['#maintenance','#repairs','#repair'];
+function fmtAgo(iso){
+  if(!iso) return '—';
+  const ms = new Date(iso).getTime();
+  const s=Math.floor((Date.now()-ms)/1000);
+  if(s<60)return`${s}s ago`;
+  if(s<3600)return`${Math.floor(s/60)}m ago`;
+  return`${Math.floor(s/3600)}h ago`;
+}
+function fmtTime(iso){
+  if(!iso) return '—';
+  const d=new Date(iso);
+  return d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})+' · '+d.toLocaleDateString([],{month:'short',day:'numeric'});
+}
+
+// Normalise a raw case from cases.json to the shape the UI expects
+function normaliseCase(c){
+  return {
+    id:         c.id ? c.id.slice(-6).toUpperCase() : '—',
+    _id:        c.id,
+    trigger:    '#maintenance',
+    msg:        c.description || '—',
+    driver:     c.driver_name || '—',
+    group:      c.group_name  || '—',
+    assignedTo: c.agent_name  || null,
+    status:     c.status === 'done' ? 'closed' : c.status === 'missed' ? 'missed' : 'open',
+    reported:   c.status === 'reported' || c.status === 'done',
+    ts:         c.opened_at,
+    notes:      c.notes || '',
+    closedAt:   c.closed_at,
+  };
+}
+
+// ── Auth helpers ─────────────────────────────────────────────────
+function getSession(){
+  try { return JSON.parse(sessionStorage.getItem('kurtex_session')||'null'); } catch(e){ return null; }
+}
+function saveSession(s){ sessionStorage.setItem('kurtex_session', JSON.stringify(s)); }
+function clearSession(){ sessionStorage.removeItem('kurtex_session'); }
+
+async function apiFetch(path, opts={}){
+  const s = getSession();
+  const res = await fetch(`${API_URL}${path}`, {
+    ...opts,
+    headers: { 'Authorization': s ? `Bearer ${s.token}` : '', 'Content-Type':'application/json', ...(opts.headers||{}) }
+  });
+  return res;
+}
+
+// ── Telegram Login Widget callback ───────────────────────────────
+window.__tgAuthCallback = async function(data){
+  try {
+    const res = await fetch(`${API_URL}/auth`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(data)
+    });
+    const json = await res.json();
+    if(!res.ok) { alert(json.error || 'Login failed'); return; }
+    saveSession(json);
+    window.__tgLoginResolve && window.__tgLoginResolve(json);
+  } catch(e){ alert('Login error: '+e.message); }
+};
+
+// Hook to load cases from the bot API with auto-refresh every 30s
+function useCases(){
+  const [cases, setCases] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState(null);
+
+  const load = React.useCallback(async () => {
+    try {
+      const res = await apiFetch('/cases');
+      if(res.status === 401){ clearSession(); window.location.reload(); return; }
+      if(!res.ok) throw new Error(`HTTP ${res.status}`);
+      const raw = await res.json();
+      setCases(raw.map(normaliseCase));
+      setError(null);
+    } catch(e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    load();
+    const id = setInterval(load, 30000);
+    return () => clearInterval(id);
+  }, [load]);
+
+  return {cases, loading, error, refresh: load};
+}
+
+const seed = [
+  {id:'C-041',trigger:'#maintenance',msg:"Engine oil leak at km 214 — truck won't start",driver:'Ahmed Hassan',group:'Fleet Group A',assignedTo:'Omar Khalid',status:'open',reported:false,ts:Date.now()-5*60000},
+  {id:'C-040',trigger:'#repairs',msg:'Left rear tyre burst, stranded on ring road',driver:'Youssef Ali',group:'Highway Unit',assignedTo:'Sara Nasser',status:'open',reported:false,ts:Date.now()-18*60000},
+  {id:'C-039',trigger:'#repair',msg:'Brake fluid warning light on',driver:'Mahmoud Saad',group:'Fleet Group B',assignedTo:'Tarek Fahmy',status:'closed',reported:true,ts:Date.now()-2*3600000},
+  {id:'C-038',trigger:'#maintenance',msg:'Windshield crack — visibility issue',driver:'Ibrahim Tawfik',group:'Night Shift',assignedTo:'Lina Mostafa',status:'closed',reported:true,ts:Date.now()-4*3600000},
+  {id:'C-037',trigger:'#repairs',msg:'Gearbox slipping at 3rd gear',driver:'Moustafa Gamal',group:'Fleet Group A',assignedTo:'Karim Adel',status:'open',reported:true,ts:Date.now()-6*3600000},
+  {id:'C-036',trigger:'#maintenance',msg:'Battery dead, needs jump-start or replacement',driver:'Sherif Nabil',group:'Fleet Group B',assignedTo:'Omar Khalid',status:'closed',reported:true,ts:Date.now()-8*3600000},
+  {id:'C-035',trigger:'#repair',msg:'Air con broken — driver overheating',driver:'Ahmed Hassan',group:'Highway Unit',assignedTo:'Sara Nasser',status:'open',reported:false,ts:Date.now()-10*3600000},
+  {id:'C-034',trigger:'#maintenance',msg:'Coolant leak detected near radiator',driver:'Youssef Ali',group:'Night Shift',assignedTo:'Tarek Fahmy',status:'closed',reported:true,ts:Date.now()-12*3600000},
+  {id:'C-033',trigger:'#repairs',msg:'Electrical short — dashboard lights flickering',driver:'Mahmoud Saad',group:'Fleet Group A',assignedTo:null,status:'open',reported:false,ts:Date.now()-14*3600000},
+  {id:'C-032',trigger:'#maintenance',msg:'Wiper blades not clearing rain properly',driver:'Ibrahim Tawfik',group:'Fleet Group B',assignedTo:'Lina Mostafa',status:'closed',reported:true,ts:Date.now()-16*3600000},
+];
+
+// ── ICON ──────────────────────────────────────────────────────────
+function Icon({name,size=16,color,style={}}){
+  const ref=useRef(null);
+  useEffect(()=>{
+    if(ref.current&&window.lucide){
+      ref.current.innerHTML='';
+      const el=document.createElement('i');
+      el.setAttribute('data-lucide',name);
+      ref.current.appendChild(el);
+      window.lucide.createIcons({el:ref.current});
+    }
+  },[name,size,color]);
+  return <span ref={ref} style={{display:'inline-flex',alignItems:'center',justifyContent:'center',width:size,height:size,color:color||'inherit',flexShrink:0,...style}}/>;
+}
+
+// ── TOGGLE ────────────────────────────────────────────────────────
+function Toggle({on,onChange,color}){
+  return(
+    <div onClick={()=>onChange(!on)} style={{width:44,height:24,borderRadius:99,background:on?color:'#cbd5e1',cursor:'pointer',position:'relative',transition:'background .2s',flexShrink:0}}>
+      <div style={{position:'absolute',top:3,left:on?20:3,width:18,height:18,borderRadius:99,background:'#fff',boxShadow:'0 1px 4px rgba(0,0,0,.25)',transition:'left .2s'}}/>
+    </div>
+  );
+}
+
+// ── BADGE ─────────────────────────────────────────────────────────
+function Badge({status,theme,dark}){
+  const open=status==='open';
+  const c=open?theme.primary:'#10B981';
+  const bg=open?accentBg(theme,dark,'primary'):'#10b98128';
+  return(
+    <span style={{display:'inline-flex',alignItems:'center',gap:5,padding:'3px 10px',borderRadius:99,fontSize:11,fontWeight:700,letterSpacing:.3,background:bg,color:c}}>
+      <span style={{width:6,height:6,borderRadius:99,background:c,display:'block'}}/>
+      {open?'Open':'Closed'}
+    </span>
+  );
+}
+
+// ── STAT CARD ─────────────────────────────────────────────────────
+function StatCard({label,value,sub,icon,color,cardStyle,dp}){
+  const bg=color+'22';
+  return(
+    <div style={{background:dp.cardBg,borderRadius:16,padding:'20px 24px',boxShadow:cardStyle==='elevated'?`0 2px 12px rgba(0,0,0,${dp===getPalette(true)?'.2':'.06'})`:'none',border:cardStyle==='elevated'?'none':`1.5px solid ${dp.borderMed}`,display:'flex',flexDirection:'column',gap:12,flex:1,minWidth:0}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+        <span style={{fontSize:13,fontWeight:600,color:dp.textMuted}}>{label}</span>
+        <div style={{width:36,height:36,borderRadius:10,background:bg,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <Icon name={icon} size={18} color={color}/>
+        </div>
+      </div>
+      <div>
+        <div style={{fontSize:32,fontWeight:800,lineHeight:1,color:dp.text}}>{value}</div>
+        <div style={{fontSize:12,color:dp.textFaint,marginTop:4}}>{sub}</div>
+      </div>
+    </div>
+  );
+}
+
+// ── MINI BAR CHART ────────────────────────────────────────────────
+function MiniBar({data,color,dp}){
+  const max=Math.max(...data.map(d=>d.v));
+  return(
+    <div style={{display:'flex',alignItems:'flex-end',gap:6,height:64}}>
+      {data.map((d,i)=>(
+        <div key={i} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:4}}>
+          <div style={{width:'100%',background:color+'22',borderRadius:'4px 4px 0 0',height:Math.max(4,(d.v/max)*52),position:'relative'}}>
+            <div style={{position:'absolute',bottom:0,left:0,right:0,background:color,borderRadius:'4px 4px 0 0',height:`${(d.v/max)*100}%`}}/>
+          </div>
+          <span style={{fontSize:10,color:dp.textFaint,fontWeight:500}}>{d.l}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── CARD WRAPPER ──────────────────────────────────────────────────
+function Card({cardStyle,dp,children,style={}}){
+  return(
+    <div style={{background:dp.cardBg,borderRadius:16,padding:'20px 24px',boxShadow:cardStyle==='elevated'?`0 2px 14px rgba(0,0,0,.08)`:'none',border:cardStyle==='elevated'?'none':`1.5px solid ${dp.borderMed}`,...style}}>
+      {children}
+    </div>
+  );
+}
+function SectionTitle({icon,label,color,dp}){
+  return(
+    <div style={{fontWeight:700,fontSize:15,marginBottom:16,display:'flex',alignItems:'center',gap:8,color:dp.text}}>
+      <Icon name={icon} size={16} color={color}/> {label}
+    </div>
+  );
+}
+
+// ── LIVE TICKER (updates every 30s) ─────────────────────────────
+function useTick(ms=30000){
+  const [t,setT]=useState(Date.now());
+  useEffect(()=>{const id=setInterval(()=>setT(Date.now()),ms);return()=>clearInterval(id);},[ms]);
+  return t;
+}
+
+// ── DASHBOARD ─────────────────────────────────────────────────────
+function Dashboard({cases,theme,cardStyle,dp,onViewCase}){
+  const dark=dp===getPalette(true);
+  const tick=useTick();
+  const open=cases.filter(c=>c.status==='open').length;
+  const closed=cases.filter(c=>c.status==='closed').length;
+  const unassigned=cases.filter(c=>!c.assignedTo&&c.status==='open').length;
+  const recent=[...cases].sort((a,b)=>b.ts-a.ts).slice(0,6);
+  const barData=[{l:'Mon',v:7},{l:'Tue',v:12},{l:'Wed',v:5},{l:'Thu',v:9},{l:'Fri',v:14},{l:'Sat',v:3},{l:'Sun',v:open}];
+  const agents=[
+    {name:'Omar Khalid',status:'online',cases:3},{name:'Sara Nasser',status:'online',cases:1},
+    {name:'Tarek Fahmy',status:'away',cases:0},{name:'Lina Mostafa',status:'offline',cases:0},
+  ];
+  const statusColor={online:'#10B981',away:'#F59E0B',offline:'#94a3b8'};
+  return(
+    <div style={{display:'flex',flexDirection:'column',gap:20}}>
+      {/* Hero banner */}
+      <div style={{borderRadius:20,padding:'24px 28px',background:`linear-gradient(130deg,${theme.primary},${theme.secondary})`,color:'#fff',position:'relative',overflow:'hidden',boxShadow:`0 8px 32px ${theme.primary}44`}}>
+        <div style={{position:'absolute',top:-40,right:-40,width:200,height:200,borderRadius:'50%',background:'rgba(255,255,255,.07)'}}/>        
+        <div style={{position:'absolute',bottom:-60,right:60,width:160,height:160,borderRadius:'50%',background:'rgba(255,255,255,.05)'}}/>
+        <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',flexWrap:'wrap',gap:16,position:'relative'}}>
+          <div>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
+              <span style={{width:8,height:8,borderRadius:99,background:'#4ade80',display:'block',boxShadow:'0 0 0 3px rgba(74,222,128,.3)',animation:'pulse-ring 2s ease infinite',color:'#4ade80'}}/>
+              <span style={{fontSize:12,fontWeight:700,opacity:.9,letterSpacing:.8,textTransform:'uppercase'}}>System Live</span>
+            </div>
+            <h1 className="syne" style={{fontSize:28,fontWeight:800,lineHeight:1.1,marginBottom:6}}>Truck Maintenance<br/>Command Center</h1>
+            <p style={{fontSize:13,opacity:.75}}>{new Date().toLocaleDateString([],{weekday:'long',month:'long',day:'numeric'})}</p>
+          </div>
+          <div style={{display:'flex',gap:20,flexWrap:'wrap'}}>
+            {[{l:'Open',v:open,icon:'alert-circle'},{l:'Unassigned',v:unassigned,icon:'user-x'},{l:'Closed Today',v:closed,icon:'check-circle-2'}].map(s=>(
+              <div key={s.l} style={{textAlign:'center'}}>
+                <div style={{fontSize:36,fontWeight:800,lineHeight:1,fontFamily:'Nunito,sans-serif'}}>{s.v}</div>
+                <div style={{fontSize:11,opacity:.75,marginTop:3,fontWeight:600,letterSpacing:.3}}>{s.l.toUpperCase()}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Stat row */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))',gap:14}}>
+        <StatCard label="Open Cases" value={open} sub="+2 since yesterday" icon="alert-circle" color={theme.primary} cardStyle={cardStyle} dp={dp}/>
+        <StatCard label="Closed Today" value={closed} sub="6 by your team" icon="check-circle-2" color={theme.secondary} cardStyle={cardStyle} dp={dp}/>
+        <StatCard label="Active Agents" value={2} sub="3 offline" icon="users" color={theme.tertiary} cardStyle={cardStyle} dp={dp}/>
+        <StatCard label="Missed" value={unassigned} sub="No agent responded" icon="alert-triangle" color="#F59E0B" cardStyle={cardStyle} dp={dp}/>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(300px,1fr))',gap:16}}>
+        {/* Live feed */}
+        <Card cardStyle={cardStyle} dp={dp} style={{gridColumn:'span 1'}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}}>
+            <div style={{fontWeight:700,fontSize:15,color:dp.text}}>Live Feed</div>
+            <div style={{display:'flex',alignItems:'center',gap:6,fontSize:11,fontWeight:700,color:'#10B981',background:'#10b98118',padding:'3px 10px',borderRadius:99,border:'1px solid #10b98133'}}>
+              <span style={{width:6,height:6,borderRadius:99,background:'#10B981',display:'block',animation:'pulse-ring 2s ease infinite',color:'#10B981'}}/> LIVE
+            </div>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:6}}>
+            {recent.map((c,i)=>(
+              <div key={c.id} onClick={()=>onViewCase(c)} style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer',padding:'8px 10px',borderRadius:10,transition:'background .15s',borderLeft:`3px solid ${i===0?theme.primary:dp.borderMed}`,background: i===0 ? accentBg(theme,dark,'primary') : 'transparent'}}
+                onMouseEnter={e=>e.currentTarget.style.background=dp.hoverBg}
+                onMouseLeave={e=>e.currentTarget.style.background=i===0?accentBg(theme,dark,'primary'):'transparent'}>
+                <div style={{width:8,height:8,borderRadius:99,background:c.status==='open'?theme.primary:'#10B981',flexShrink:0,...(c.status==='open'&&i===0?{animation:'pulse-ring 2s ease infinite',color:theme.primary}:{})}} />
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',color:dp.text}}>{c.msg}</div>
+                  <div style={{fontSize:11,color:dp.textFaint,marginTop:1}}>{c.driver} · {fmtAgo(c.ts)}</div>
+                </div>
+                {!c.assignedTo&&<span style={{fontSize:10,fontWeight:700,color:'#F59E0B',background:'#F59E0B18',padding:'2px 7px',borderRadius:6,flexShrink:0,whiteSpace:'nowrap'}}>⚠ Unassigned</span>}
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+          {/* Weekly bar */}
+          <Card cardStyle={cardStyle} dp={dp}>
+            <div style={{fontWeight:700,fontSize:15,marginBottom:14,color:dp.text}}>This Week</div>
+            <MiniBar data={barData} color={theme.primary} dp={dp}/>
+          </Card>
+          {/* Team status */}
+          <Card cardStyle={cardStyle} dp={dp}>
+            <div style={{fontWeight:700,fontSize:15,marginBottom:14,color:dp.text}}>Team Status</div>
+            <div style={{display:'flex',flexDirection:'column',gap:8}}>
+              {agents.map(a=>(
+                <div key={a.name} style={{display:'flex',alignItems:'center',gap:10}}>
+                  <div style={{width:32,height:32,borderRadius:99,background:accentBg(theme,dark,'primary'),display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,color:theme.primary,flexShrink:0}}>
+                    {a.name.split(' ').map(w=>w[0]).join('')}
+                  </div>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:13,fontWeight:600,color:dp.text}}>{a.name}</div>
+                    <div style={{fontSize:11,color:dp.textFaint,marginTop:1,display:'flex',alignItems:'center',gap:4}}>
+                      <span style={{width:6,height:6,borderRadius:99,background:statusColor[a.status],display:'block'}}/>
+                      {a.status.charAt(0).toUpperCase()+a.status.slice(1)}
+                      {a.cases>0&&<span style={{marginLeft:4,color:theme.primary,fontWeight:700}}>· {a.cases} active</span>}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── MISSED ALERTS ─────────────────────────────────────────────────
+function MissedAlerts({cases,theme,cardStyle,dp,onViewCase}){
+  const dark=dp===getPalette(true);
+  const missed=cases.filter(c=>!c.assignedTo&&c.status==='open').sort((a,b)=>b.ts-a.ts);
+  return(
+    <div style={{display:'flex',flexDirection:'column',gap:20}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
+        <div>
+          <h1 style={{fontSize:22,fontWeight:800,color:dp.text}}>Missed Alerts</h1>
+          <p style={{color:dp.textMuted,fontSize:14,marginTop:2}}>Unhandled alerts — no agent assigned</p>
+        </div>
+        <div style={{padding:'6px 16px',borderRadius:99,background:'#F59E0B22',border:'1px solid #F59E0B44',fontSize:13,fontWeight:700,color:'#F59E0B'}}>
+          {missed.length} unhandled
+        </div>
+      </div>
+      {missed.length===0
+        ? <Card cardStyle={cardStyle} dp={dp}>
+            <div style={{textAlign:'center',padding:'40px 20px',color:dp.textFaint}}>
+              <Icon name="check-circle-2" size={40} color='#10B981' style={{margin:'0 auto 12px'}}/>
+              <div style={{fontSize:15,fontWeight:700,color:'#10B981',marginBottom:4}}>All clear!</div>
+              <div style={{fontSize:13}}>No missed alerts right now.</div>
+            </div>
+          </Card>
+        : <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            {missed.map(c=>(
+              <div key={c.id} onClick={()=>onViewCase(c)} style={{background:dp.cardBg,borderRadius:16,padding:'16px 20px',boxShadow:cardStyle==='elevated'?'0 2px 14px rgba(0,0,0,.08)':'none',border:`2px solid #F59E0B44`,cursor:'pointer',display:'flex',gap:14,alignItems:'flex-start',transition:'background .15s'}}
+                onMouseEnter={e=>e.currentTarget.style.background=dp.hoverBg}
+                onMouseLeave={e=>e.currentTarget.style.background=dp.cardBg}>
+                <div style={{width:42,height:42,borderRadius:12,background:'#F59E0B22',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                  <Icon name="alert-triangle" size={20} color="#F59E0B"/>
+                </div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:6}}>
+                    <span style={{fontFamily:'monospace',fontSize:12,fontWeight:700,color:theme.primary,background:accentBg(theme,dark,'primary'),padding:'2px 8px',borderRadius:6}}>{c.trigger}</span>
+                    <span style={{fontSize:12,color:dp.textMuted}}>{c.group}</span>
+                    <span style={{fontSize:11,color:'#F59E0B',fontWeight:700,marginLeft:'auto'}}>{fmtAgo(c.ts)}</span>
+                  </div>
+                  <div style={{fontWeight:700,fontSize:14,color:dp.text,lineHeight:1.4}}>{c.msg}</div>
+                  <div style={{fontSize:12,color:dp.textMuted,marginTop:6,display:'flex',alignItems:'center',gap:4}}>
+                    <Icon name="user" size={12} color={dp.textFaint}/> {c.driver} · Reported {fmtTime(c.ts)}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+      }
+    </div>
+  );
+}
+
+// ── CASES LIST ────────────────────────────────────────────────────
+function CasesList({cases,theme,cardStyle,dp,onViewCase}){
+  const [filter,setFilter]=useState('all');
+  const [search,setSearch]=useState('');
+  const dark=dp===getPalette(true);
+  const visible=cases.filter(c=>{
+    if(filter==='open'&&c.status!=='open')return false;
+    if(filter==='closed'&&c.status!=='closed')return false;
+    if(search&&!c.msg.toLowerCase().includes(search.toLowerCase())&&!c.driver.toLowerCase().includes(search.toLowerCase())&&!c.id.toLowerCase().includes(search.toLowerCase()))return false;
+    return true;
+  });
+  return(
+    <div style={{display:'flex',flexDirection:'column',gap:20}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
+        <div>
+          <h1 style={{fontSize:22,fontWeight:800,color:dp.text}}>Cases</h1>
+          <p style={{color:dp.textMuted,fontSize:14,marginTop:2}}>{visible.length} cases shown</p>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:8,background:dp.cardBg,border:`1.5px solid ${dp.borderMed}`,borderRadius:10,padding:'6px 12px'}}>
+          <Icon name="search" size={15} color={dp.textFaint}/>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search cases…" style={{border:'none',outline:'none',fontFamily:'inherit',fontSize:13,width:180,background:'transparent',color:dp.text}}/>
+        </div>
+      </div>
+      <div style={{display:'flex',gap:4,background:dp.inputBg,borderRadius:10,padding:4,width:'fit-content',border:`1px solid ${dp.border}`}}>
+        {['all','open','closed'].map(k=>(
+          <button key={k} onClick={()=>setFilter(k)} style={{padding:'6px 16px',borderRadius:8,border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:600,transition:'all .15s',
+            background:filter===k?dp.cardBg:'transparent',
+            color:filter===k?theme.primary:dp.textMuted,
+            boxShadow:filter===k?`0 1px 4px rgba(0,0,0,.1)`:'none',
+          }}>{k.charAt(0).toUpperCase()+k.slice(1)}</button>
+        ))}
+      </div>
+      <div style={{background:dp.cardBg,borderRadius:16,overflow:'hidden',boxShadow:cardStyle==='elevated'?`0 2px 14px rgba(0,0,0,.08)`:'none',border:cardStyle==='elevated'?'none':`1.5px solid ${dp.borderMed}`}}>
+        <div style={{overflowX:'auto'}}>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+            <thead>
+              <tr style={{background:dp.tableHead,borderBottom:`1px solid ${dp.border}`}}>
+                {['ID','Message','Reported by','Assigned To','Status','Time'].map(h=>(
+                  <th key={h} style={{padding:'12px 16px',textAlign:'left',fontWeight:700,color:dp.textMuted,fontSize:12,whiteSpace:'nowrap'}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map(c=>(
+                <tr key={c.id} onClick={()=>onViewCase(c)} style={{borderBottom:`1px solid ${dp.border}`,cursor:'pointer',transition:'background .12s'}}
+                  onMouseEnter={e=>e.currentTarget.style.background=dp.tableRowHover}
+                  onMouseLeave={e=>e.currentTarget.style.background=dp.cardBg}>
+                  <td style={{padding:'14px 16px',fontWeight:700,color:theme.primary,fontFamily:'monospace'}}>{c.id}</td>
+                  <td style={{padding:'14px 16px',maxWidth:220}}>
+                    <div style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontWeight:500,color:dp.text}}>{c.msg}</div>
+                    <div style={{fontSize:11,color:dp.textFaint,marginTop:2}}>{c.trigger} · {c.group}</div>
+                  </td>
+                  <td style={{padding:'14px 16px',whiteSpace:'nowrap',color:dp.text}}>
+                    <div style={{display:'flex',alignItems:'center',gap:8}}>
+                      <div style={{width:28,height:28,borderRadius:99,background:accentBg(theme,dark,'primary'),display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:theme.primary,flexShrink:0}}>
+                        {c.driver.split(' ').map(w=>w[0]).join('').slice(0,2)}
+                      </div>
+                      {c.driver}
+                    </div>
+                  </td>
+                  <td style={{padding:'14px 16px',whiteSpace:'nowrap',color:c.assignedTo?dp.text:'#F59E0B',fontWeight:c.assignedTo?400:600}}>{c.assignedTo||'⚠ Unassigned'}</td>
+                  <td style={{padding:'14px 16px'}}><Badge status={c.status} theme={theme} dark={dark}/></td>
+                  <td style={{padding:'14px 16px',color:dp.textFaint,whiteSpace:'nowrap',fontSize:12}}>{fmtAgo(c.ts)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── CASE DETAIL PANEL ─────────────────────────────────────────────
+function CasePanel({c,theme,dp,onClose}){
+  if(!c)return null;
+  const dark=dp===getPalette(true);
+  const timeline=[
+    {icon:'bell',       label:'Alert triggered',     sub:`${c.trigger} keyword detected in ${c.group}`,  ts:c.ts},
+    {icon:'file-plus',  label:'Case created',         sub:'New case logged in the system',                ts:c.ts+30000},
+    {icon:'send',       label:'Agents informed',      sub:'All on-shift agents notified via Telegram DM',  ts:c.ts+35000},
+    ...(c.assignedTo ? [
+      {icon:'user-check', label:'Case assigned',       sub:`${c.assignedTo} picked up the case`,            ts:c.ts+90000},
+    ] : [
+      {icon:'user-x',    label:'No one assigned',     sub:'No agent accepted within 10 minutes',           ts:c.ts+10*60000},
+      {icon:'send',      label:'Agents informed ×2',  sub:'Second reminder sent to all on-shift agents',    ts:c.ts+11*60000},
+    ]),
+    ...(c.reported ? [
+      {icon:'clipboard-check', label:'Case reported',  sub:`Agent filed a report via /report command`,      ts:c.ts+1*3600000},
+    ] : []),
+    ...(c.status==='closed'?[{icon:'check-circle-2',label:'Case closed',sub:'Marked resolved by agent',ts:c.ts+2*3600000}]:[]),
+  ];
+  return(
+    <div style={{position:'fixed',inset:0,zIndex:100,display:'flex',alignItems:'stretch',justifyContent:'flex-end'}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,.35)',backdropFilter:'blur(3px)'}}/>
+      <div style={{position:'relative',width:'min(480px,100vw)',background:dp.cardBg,boxShadow:'-4px 0 50px rgba(0,0,0,.2)',overflowY:'auto',display:'flex',flexDirection:'column',animation:'slideIn .25s ease'}}>
+        <div style={{padding:'24px 24px 20px',display:'flex',alignItems:'center',justifyContent:'space-between',borderBottom:`1px solid ${dp.border}`}}>
+          <div>
+            <div style={{fontFamily:'monospace',fontWeight:700,color:theme.primary,fontSize:14}}>{c.id}</div>
+            <div style={{fontWeight:800,fontSize:18,marginTop:4,lineHeight:1.3,color:dp.text}}>{c.msg}</div>
+          </div>
+          <button onClick={onClose} style={{width:36,height:36,borderRadius:10,border:`1.5px solid ${dp.borderMed}`,background:dp.inputBg,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+            <Icon name="x" size={16} color={dp.textMuted}/>
+          </button>
+        </div>
+        <div style={{padding:24,display:'flex',flexDirection:'column',gap:20}}>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+            {[
+              {l:'Status',v:<Badge status={c.status} theme={theme} dark={dark}/>},
+              {l:'Trigger',v:<span style={{fontFamily:'monospace',fontWeight:700,color:theme.primary,fontSize:13}}>{c.trigger}</span>},
+              {l:'Reported by',v:c.driver},
+              {l:'Group',v:c.group},
+              {l:'Assigned To',v:c.assignedTo||<span style={{color:'#F59E0B',fontWeight:600}}>⚠ Unassigned</span>},
+              {l:'Reported at',v:fmtTime(c.ts)},
+              {l:'Agent Report',v:c.reported?<span style={{color:theme.tertiary,fontWeight:700,display:'flex',alignItems:'center',gap:5}}><Icon name="clipboard-check" size={13} color={theme.tertiary}/>Filed</span>:<span style={{color:dp.textFaint,fontWeight:500}}>Not yet</span>},
+            ].map(({l,v})=>(
+              <div key={l} style={{background:dp.inputBg,borderRadius:10,padding:'12px 14px',border:`1px solid ${dp.border}`}}>
+                <div style={{fontSize:11,color:dp.textFaint,fontWeight:600,marginBottom:4}}>{l}</div>
+                <div style={{fontSize:13,fontWeight:500,color:dp.text}}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <div>
+            <div style={{fontWeight:700,fontSize:14,marginBottom:14,color:dp.text}}>Timeline</div>
+            {timeline.map((t,i)=>(
+              <div key={i} style={{display:'flex',gap:12,paddingBottom:i<timeline.length-1?18:0}}>
+                <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
+                  <div style={{width:32,height:32,borderRadius:10,background:accentBg(theme,dark,'primary'),display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                    <Icon name={t.icon} size={15} color={theme.primary}/>
+                  </div>
+                  {i<timeline.length-1&&<div style={{width:2,flex:1,minHeight:12,background:dp.border,margin:'4px 0'}}/>}
+                </div>
+                <div style={{paddingTop:6}}>
+                  <div style={{fontWeight:700,fontSize:13,color:dp.text}}>{t.label}</div>
+                  <div style={{fontSize:12,color:dp.textMuted,marginTop:2}}>{t.sub}</div>
+                  <div style={{fontSize:11,color:dp.textFaint,marginTop:2}}>{fmtTime(t.ts)}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
+    </div>
+  );
+}
+
+// ── ALERTS FEED ───────────────────────────────────────────────────
+function AlertsFeed({cases,theme,cardStyle,dp,onViewCase}){
+  const dark=dp===getPalette(true);
+  const alerts=[...cases].sort((a,b)=>b.ts-a.ts);
+  return(
+    <div style={{display:'flex',flexDirection:'column',gap:20}}>
+      <div>
+        <h1 style={{fontSize:22,fontWeight:800,color:dp.text}}>Alerts Feed</h1>
+        <p style={{color:dp.textMuted,fontSize:14,marginTop:2}}>Live incoming driver alerts from Telegram</p>
+      </div>
+      <div style={{display:'flex',flexDirection:'column',gap:12}}>
+        {alerts.map(c=>(
+          <div key={c.id} onClick={()=>onViewCase(c)} style={{background:dp.cardBg,borderRadius:16,padding:'16px 20px',boxShadow:cardStyle==='elevated'?`0 2px 14px rgba(0,0,0,.08)`:'none',border:cardStyle==='elevated'?'none':`1.5px solid ${dp.borderMed}`,cursor:'pointer',display:'flex',gap:14,alignItems:'flex-start',transition:'box-shadow .15s,background .15s'}}
+            onMouseEnter={e=>{e.currentTarget.style.background=dp.hoverBg}}
+            onMouseLeave={e=>{e.currentTarget.style.background=dp.cardBg}}>
+            <div style={{width:40,height:40,borderRadius:12,background:accentBg(theme,dark,c.status==='open'?'primary':'secondary'),display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+              <Icon name={c.status==='open'?'alert-circle':'check-circle-2'} size={20} color={c.status==='open'?theme.primary:theme.secondary}/>
+            </div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                <span style={{fontFamily:'monospace',fontSize:12,fontWeight:700,color:theme.primary,background:accentBg(theme,dark,'primary'),padding:'2px 8px',borderRadius:6}}>{c.trigger}</span>
+                <span style={{fontSize:12,color:dp.textMuted}}>{c.group}</span>
+                <span style={{fontSize:12,color:dp.textFaint,marginLeft:'auto'}}>{fmtAgo(c.ts)}</span>
+              </div>
+              <div style={{fontWeight:600,fontSize:14,marginTop:6,lineHeight:1.4,color:dp.text}}>{c.msg}</div>
+              <div style={{display:'flex',alignItems:'center',gap:12,marginTop:8,flexWrap:'wrap'}}>
+                <span style={{fontSize:12,color:dp.textMuted,display:'flex',alignItems:'center',gap:4}}>
+                  <Icon name="user" size={12} color={dp.textFaint}/> {c.driver}
+                </span>
+                {c.assignedTo&&<span style={{fontSize:12,color:dp.textMuted,display:'flex',alignItems:'center',gap:4}}>
+                  <Icon name="user-check" size={12} color={dp.textFaint}/> {c.assignedTo}
+                </span>}
+                <Badge status={c.status} theme={theme} dark={dark}/>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── REPORTS ───────────────────────────────────────────────────────
+function Reports({cases,theme,cardStyle,dp}){
+  const open=cases.filter(c=>c.status==='open').length;
+  const closed=cases.filter(c=>c.status==='closed').length;
+  const byTrigger=TRIGGERS.map(t=>({name:t,count:cases.filter(c=>c.trigger===t).length}));
+  const max=Math.max(...byTrigger.map(t=>t.count));
+  return(
+    <div style={{display:'flex',flexDirection:'column',gap:20}}>
+      <div>
+        <h1 style={{fontSize:22,fontWeight:800,color:dp.text}}>Reports & Analytics</h1>
+        <p style={{color:dp.textMuted,fontSize:14,marginTop:2}}>Weekly performance overview</p>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))',gap:16}}>
+        <Card cardStyle={cardStyle} dp={dp}>
+          <div style={{fontWeight:700,fontSize:15,marginBottom:16,color:dp.text}}>Alerts by Trigger</div>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            {byTrigger.map(t=>(
+              <div key={t.name}>
+                <div style={{display:'flex',justifyContent:'space-between',fontSize:13,fontWeight:600,marginBottom:6}}>
+                  <span style={{fontFamily:'monospace',color:theme.primary}}>{t.name}</span>
+                  <span style={{color:dp.text}}>{t.count}</span>
+                </div>
+                <div style={{height:8,borderRadius:99,background:dp.inputBg,border:`1px solid ${dp.border}`}}>
+                  <div style={{height:'100%',borderRadius:99,background:theme.primary,width:`${(t.count/max)*100}%`,transition:'width .6s ease'}}/>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+        <Card cardStyle={cardStyle} dp={dp}>
+          <div style={{fontWeight:700,fontSize:15,marginBottom:16,color:dp.text}}>Resolution Rate</div>
+          <div style={{display:'flex',justifyContent:'center',marginBottom:16}}>
+            <svg width={120} height={120} viewBox="0 0 42 42">
+              <circle cx="21" cy="21" r="15.915" fill="none" stroke={dp.border} strokeWidth="4"/>
+              <circle cx="21" cy="21" r="15.915" fill="none" stroke={theme.primary} strokeWidth="4" strokeDasharray={`${(closed/(open+closed))*100} ${100-(closed/(open+closed))*100}`} strokeDashoffset="25" strokeLinecap="round"/>
+              <text x="21" y="21" textAnchor="middle" dy=".3em" fontSize="7" fontWeight="800" fill={dp.text}>{Math.round((closed/(open+closed))*100)}%</text>
+            </svg>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+            <div style={{textAlign:'center',background:accentBg(theme,dp===getPalette(true),'primary'),borderRadius:10,padding:'10px 8px',border:`1px solid ${theme.primary}33`}}>
+              <div style={{fontWeight:800,fontSize:24,color:theme.primary}}>{closed}</div>
+              <div style={{fontSize:11,color:theme.primary,fontWeight:600}}>Closed</div>
+            </div>
+            <div style={{textAlign:'center',background:'#F59E0B22',borderRadius:10,padding:'10px 8px',border:'1px solid #F59E0B33'}}>
+              <div style={{fontWeight:800,fontSize:24,color:'#F59E0B'}}>{open}</div>
+              <div style={{fontSize:11,color:'#F59E0B',fontWeight:600}}>Open</div>
+            </div>
+          </div>
+        </Card>
+        <Card cardStyle={cardStyle} dp={dp}>
+          <div style={{fontWeight:700,fontSize:15,marginBottom:16,color:dp.text}}>🏆 Leaderboard</div>
+          <div style={{display:'flex',flexDirection:'column',gap:6}}>
+            {LEADERBOARD.map((a,i)=>(
+              <div key={a.name} style={{display:'flex',alignItems:'center',gap:12,padding:'8px 10px',borderRadius:10,background:i===0?accentBg(theme,dp===getPalette(true),'primary'):'transparent'}}>
+                <div style={{width:24,fontWeight:800,fontSize:14,color:i===0?theme.primary:dp.textFaint,textAlign:'center'}}>{i===0?'🥇':i===1?'🥈':i===2?'🥉':i+1}</div>
+                <div style={{width:32,height:32,borderRadius:99,background:i===0?theme.primary:accentBg(theme,dp===getPalette(true),'primary'),display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:i===0?'#fff':theme.primary,flexShrink:0}}>
+                  {a.name.split(' ').map(w=>w[0]).join('')}
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:700,fontSize:13,color:dp.text}}>{a.name}</div>
+                  <div style={{fontSize:11,color:dp.textFaint}}>avg {a.avg} · {a.streak}d streak</div>
+                </div>
+                <div style={{fontWeight:800,fontSize:16,color:theme.primary}}>{a.closed}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ── SETTINGS ──────────────────────────────────────────────────────
+function Settings({theme,cardStyle,dp,tweaks,setTweaks}){
+  const dark=dp===getPalette(true);
+  const [notifs,setNotifs]=useState({newCase:true,unassigned:true,casesClosed:false,dailyReport:true,escalations:true,agentOnline:false});
+  const notifRows=[
+    {k:'newCase',      l:'New case created',        sub:'Alert when a driver triggers a keyword'},
+    {k:'unassigned',   l:'Unassigned case reminder', sub:'Ping if a case has no agent after 10 min'},
+    {k:'casesClosed',  l:'Case closed',              sub:'Notify when an agent marks a case done'},
+    {k:'dailyReport',  l:'Daily summary report',     sub:'Morning digest at 8:00 AM'},
+    {k:'escalations',  l:'Escalation alerts',        sub:'High-priority cases unresolved after 1h'},
+    {k:'agentOnline',  l:'Agent shift changes',      sub:'When someone goes on or off call'},
+  ];
+  const accentOpts=[
+    {k:'violet',   label:'Violet',    color:'#7C3AED'},
+    {k:'darkblue', label:'Dark Blue', color:'#1D4ED8'},
+    {k:'darkgreen',label:'Dark Green',color:'#047857'},
+  ];
+  const row=(l,v)=>(
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'9px 12px',background:dp.inputBg,borderRadius:10,border:`1px solid ${dp.border}`}}>
+      <span style={{fontSize:13,color:dp.textMuted,fontWeight:500}}>{l}</span>
+      <span style={{fontSize:13,fontWeight:600,color:dp.text}}>{v}</span>
+    </div>
+  );
+  return(
+    <div style={{display:'flex',flexDirection:'column',gap:20}}>
+      <div>
+        <h1 style={{fontSize:22,fontWeight:800,color:dp.text}}>Settings</h1>
+        <p style={{color:dp.textMuted,fontSize:14,marginTop:2}}>Preferences & notifications</p>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(300px,1fr))',gap:16}}>
+        {/* Profile */}
+        <Card cardStyle={cardStyle} dp={dp}>
+          <SectionTitle icon="user-circle-2" label="Profile" color={theme.primary} dp={dp}/>
+          <div style={{display:'flex',alignItems:'center',gap:14,marginBottom:18}}>
+            <div style={{width:52,height:52,borderRadius:14,background:accentBg(theme,dark,'primary'),display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,fontWeight:800,color:theme.primary,flexShrink:0}}>SA</div>
+            <div>
+              <div style={{fontWeight:700,fontSize:15,color:dp.text}}>Super Admin</div>
+              <div style={{fontSize:12,color:dp.textFaint,marginTop:2}}>admin@kurtex.bot</div>
+              <div style={{display:'inline-flex',alignItems:'center',gap:5,marginTop:5,background:accentBg(theme,dark,'primary'),borderRadius:6,padding:'2px 10px',fontSize:11,fontWeight:700,color:theme.primary}}>
+                <div style={{width:6,height:6,borderRadius:99,background:theme.primary}}/> Super Admin
+              </div>
+            </div>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            {row('Display Name','Super Admin')}
+            {row('Timezone','Africa/Cairo (UTC+3)')}
+            {row('Language','English')}
+          </div>
+        </Card>
+
+        {/* Appearance */}
+        <Card cardStyle={cardStyle} dp={dp}>
+          <SectionTitle icon="palette" label="Appearance" color={theme.secondary} dp={dp}/>
+          <div style={{display:'flex',flexDirection:'column',gap:16}}>
+            <div>
+              <div style={{fontSize:12,fontWeight:700,color:dp.textFaint,marginBottom:8,letterSpacing:.5}}>ACCENT COLOR</div>
+              <div style={{display:'flex',gap:8}}>
+                {accentOpts.map(a=>(
+                  <button key={a.k} onClick={()=>setTweaks(t=>({...t,accent:a.k}))} style={{
+                    flex:1,padding:'10px 0',borderRadius:10,border:'2px solid',cursor:'pointer',fontFamily:'inherit',fontSize:11,fontWeight:700,transition:'all .18s',
+                    background:tweaks.accent===a.k?a.color:dp.inputBg,
+                    color:tweaks.accent===a.k?'#fff':dp.textMuted,
+                    borderColor:tweaks.accent===a.k?a.color:dp.borderMed,
+                  }}>{a.label}</button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div style={{fontSize:12,fontWeight:700,color:dp.textFaint,marginBottom:8,letterSpacing:.5}}>CARD STYLE</div>
+              <div style={{display:'flex',gap:8}}>
+                {[{k:'elevated',l:'Elevated'},{k:'outline',l:'Outline'}].map(s=>(
+                  <button key={s.k} onClick={()=>setTweaks(t=>({...t,cardStyle:s.k}))} style={{
+                    flex:1,padding:'10px 0',borderRadius:10,border:'2px solid',cursor:'pointer',fontFamily:'inherit',fontSize:12,fontWeight:700,transition:'all .18s',
+                    background:tweaks.cardStyle===s.k?theme.primary:dp.inputBg,
+                    color:tweaks.cardStyle===s.k?'#fff':dp.textMuted,
+                    borderColor:tweaks.cardStyle===s.k?theme.primary:dp.borderMed,
+                  }}>{s.l}</button>
+                ))}
+              </div>
+            </div>
+            {/* Dark mode toggle */}
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 14px',background:dark?'#1a2336':accentBg(theme,false,'primary'),borderRadius:12,border:`1px solid ${dark?theme.primary+'33':theme.primary+'22'}`}}>
+              <div style={{display:'flex',alignItems:'center',gap:10}}>
+                <div style={{width:34,height:34,borderRadius:10,background:dark?theme.primary:accentBg(theme,false,'primary'),display:'flex',alignItems:'center',justifyContent:'center'}}>
+                  <Icon name={dark?'moon':'sun'} size={16} color={dark?'#fff':theme.primary}/>
+                </div>
+                <div>
+                  <div style={{fontSize:13,fontWeight:700,color:dp.text}}>Dark Mode</div>
+                  <div style={{fontSize:11,color:dp.textFaint,marginTop:1}}>{dark?'Dark theme active':'Light theme active'}</div>
+                </div>
+              </div>
+              <Toggle on={dark} onChange={v=>setTweaks(t=>({...t,darkMode:v}))} color={theme.primary}/>
+            </div>
+          </div>
+        </Card>
+
+        {/* Notifications */}
+        <Card cardStyle={cardStyle} dp={dp}>
+          <SectionTitle icon="bell" label="Notifications" color={theme.tertiary} dp={dp}/>
+          <div style={{display:'flex',flexDirection:'column',gap:2}}>
+            {notifRows.map(r=>(
+              <div key={r.k} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'11px 10px',borderRadius:10,transition:'background .12s',cursor:'pointer',gap:12}}
+                onMouseEnter={e=>e.currentTarget.style.background=dp.hoverBg}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}
+                onClick={()=>setNotifs(n=>({...n,[r.k]:!n[r.k]}))}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,fontWeight:600,color:dp.text}}>{r.l}</div>
+                  <div style={{fontSize:11,color:dp.textFaint,marginTop:1}}>{r.sub}</div>
+                </div>
+                <Toggle on={notifs[r.k]} onChange={v=>setNotifs(n=>({...n,[r.k]:v}))} color={theme.primary}/>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ── NAV ───────────────────────────────────────────────────────────
+const NAV=[
+  {k:'dashboard',l:'Dashboard',icon:'layout-dashboard'},
+  {k:'cases',    l:'Cases',    icon:'folder-open'},
+  {k:'alerts',   l:'Alerts',   icon:'bell'},
+  {k:'missed',   l:'Missed',   icon:'alert-triangle'},
+  {k:'reports',  l:'Reports',  icon:'bar-chart-2'},
+  {k:'settings', l:'Settings', icon:'settings'},
+];
+
+// ── KURTEX LOGO SVG ──────────────────────────────────────────────
+const BG_PHOTO = 'https://images.unsplash.com/photo-1519003722824-194d4455a60c?w=1920&q=80';
+
+function Sidebar({page,setPage,theme,dp,collapsed,setCollapsed}){
+  const dark=dp===getPalette(true);
+  return(
+    <div style={{width:collapsed?64:230,background:dark?'rgba(17,24,39,.82)':'rgba(255,255,255,.82)',backdropFilter:'blur(18px)',WebkitBackdropFilter:'blur(18px)',borderRight:`1px solid ${dp.border}`,display:'flex',flexDirection:'column',transition:'width .22s ease',flexShrink:0,zIndex:10,overflow:'hidden',position:'relative'}}>
+      {/* Logo header with gradient */}
+      <div style={{padding:collapsed?'18px 0':'18px 20px',display:'flex',alignItems:'center',gap:12,borderBottom:`1px solid ${dp.border}`,justifyContent:collapsed?'center':'flex-start',background:`linear-gradient(135deg,${theme.primary}18,${theme.secondary}10)`,position:'relative',overflow:'hidden'}}>
+        <div style={{position:'absolute',inset:0,backgroundImage:`radial-gradient(circle at 80% 20%, ${theme.primary}22 0%, transparent 60%)`,pointerEvents:'none'}}/>
+        <div style={{width:38,height:38,borderRadius:11,background:theme.primary,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,boxShadow:`0 4px 14px ${theme.primary}55`,fontFamily:'Nunito,sans-serif',fontWeight:900,fontSize:20,color:'#fff',letterSpacing:-1}}>
+          K
+        </div>
+        {!collapsed&&<div>
+          <div className="syne" style={{fontWeight:800,fontSize:15,lineHeight:1,color:dp.text,letterSpacing:-.3}}>Kurtex</div>
+          <div style={{fontSize:10,color:dp.textFaint,marginTop:3,fontWeight:500,letterSpacing:.5,textTransform:'uppercase'}}>Alert Bot CRM</div>
+        </div>}
+      </div>
+      <nav style={{flex:1,padding:'12px 8px',display:'flex',flexDirection:'column',gap:2}}>
+        {NAV.map(n=>{
+          const active=page===n.k;
+          return(
+            <button key={n.k} onClick={()=>setPage(n.k)} style={{
+              width:'100%',padding:collapsed?'10px 0':'10px 12px',
+              background:active?accentBg(theme,dp===getPalette(true),'primary'):'transparent',
+              color:active?theme.primary:dp.textMuted,
+              border:'none',cursor:'pointer',borderRadius:10,
+              display:'flex',alignItems:'center',gap:10,
+              fontFamily:'inherit',fontSize:13,fontWeight:active?700:500,
+              transition:'all .15s',justifyContent:collapsed?'center':'flex-start',
+            }}
+            onMouseEnter={e=>{if(!active){e.currentTarget.style.background=dp.hoverBg;e.currentTarget.style.color=dp.text;}}}
+            onMouseLeave={e=>{if(!active){e.currentTarget.style.background='transparent';e.currentTarget.style.color=dp.textMuted;}}}>
+              <Icon name={n.icon} size={18} color={active?theme.primary:'currentColor'}/>
+              {!collapsed&&n.l}
+            </button>
+          );
+        })}
+      </nav>
+      <button onClick={()=>setCollapsed(c=>!c)} style={{margin:'0 8px 12px',padding:'8px',border:`1px solid ${dp.borderMed}`,borderRadius:10,background:dp.inputBg,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',color:dp.textFaint,transition:'all .15s'}}
+        onMouseEnter={e=>e.currentTarget.style.background=dp.hoverBg}
+        onMouseLeave={e=>e.currentTarget.style.background=dp.inputBg}>
+        <Icon name={collapsed?'chevrons-right':'chevrons-left'} size={14}/>
+      </button>
+    </div>
+  );
+}
+
+function BottomNav({page,setPage,theme,dp}){
+  return(
+    <div style={{position:'fixed',bottom:0,left:0,right:0,background:dp.navBg,borderTop:`1px solid ${dp.border}`,display:'flex',zIndex:50,paddingBottom:'env(safe-area-inset-bottom,0)'}}>
+      {NAV.map(n=>{
+        const active=page===n.k;
+        return(
+          <button key={n.k} onClick={()=>setPage(n.k)} style={{flex:1,padding:'10px 0 8px',border:'none',background:'transparent',cursor:'pointer',display:'flex',flexDirection:'column',alignItems:'center',gap:3,color:active?theme.primary:dp.textFaint,fontFamily:'inherit',fontSize:9,fontWeight:700,transition:'color .15s'}}>
+            <Icon name={n.icon} size={20} color={active?theme.primary:dp.textFaint}/>
+            {n.l}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── TWEAKS PANEL ──────────────────────────────────────────────────
+function TweaksPanel({tweaks,setTweaks,visible,dp,theme}){
+  if(!visible)return null;
+  const opt=(key,val,label)=>(
+    <button onClick={()=>setTweaks(t=>({...t,[key]:val}))} style={{
+      padding:'6px 12px',borderRadius:8,border:`1.5px solid`,cursor:'pointer',fontSize:12,fontWeight:600,fontFamily:'inherit',transition:'all .15s',
+      background:tweaks[key]===val?theme.primary:dp.cardBg,
+      color:tweaks[key]===val?'#fff':dp.textMuted,
+      borderColor:tweaks[key]===val?theme.primary:dp.borderMed,
+    }}>{label}</button>
+  );
+  return(
+    <div style={{position:'fixed',bottom:80,right:16,zIndex:200,background:dp.cardBg,borderRadius:16,boxShadow:'0 8px 40px rgba(0,0,0,.2)',padding:'20px',width:250,border:`1px solid ${dp.borderMed}`}}>
+      <div style={{fontWeight:800,fontSize:14,marginBottom:16,display:'flex',alignItems:'center',gap:8,color:dp.text}}><Icon name="sliders-horizontal" size={15} color={theme.primary}/>Tweaks</div>
+      <div style={{display:'flex',flexDirection:'column',gap:14}}>
+        <div>
+          <div style={{fontSize:11,fontWeight:700,color:dp.textFaint,marginBottom:6,letterSpacing:.5}}>ACCENT</div>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+            {opt('accent','violet','Violet')}
+            {opt('accent','darkblue','Dark Blue')}
+            {opt('accent','darkgreen','Dark Green')}
+          </div>
+        </div>
+        <div>
+          <div style={{fontSize:11,fontWeight:700,color:dp.textFaint,marginBottom:6,letterSpacing:.5}}>CARD STYLE</div>
+          <div style={{display:'flex',gap:6}}>
+            {opt('cardStyle','elevated','Elevated')}
+            {opt('cardStyle','outline','Outline')}
+          </div>
+        </div>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 10px',background:dp.inputBg,borderRadius:10,border:`1px solid ${dp.border}`}}>
+          <span style={{fontSize:12,fontWeight:600,color:dp.text,display:'flex',alignItems:'center',gap:6}}>
+            <Icon name={tweaks.darkMode?'moon':'sun'} size={14} color={theme.primary}/> Dark Mode
+          </span>
+          <Toggle on={!!tweaks.darkMode} onChange={v=>setTweaks(t=>({...t,darkMode:v}))} color={theme.primary}/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── APP ───────────────────────────────────────────────────────────
+function LoginScreen({onLogin, dp, theme}){
+  const ref = React.useRef(null);
+  React.useEffect(()=>{
+    // inject Telegram Login Widget script dynamically
+    const s = document.createElement('script');
+    s.src = 'https://telegram.org/js/telegram-widget.js?22';
+    s.setAttribute('data-telegram-login', BOT_USERNAME);
+    s.setAttribute('data-size', 'large');
+    s.setAttribute('data-onauth', '__tgAuthCallback(user)');
+    s.setAttribute('data-request-access', 'write');
+    s.async = true;
+    if(ref.current){ ref.current.innerHTML=''; ref.current.appendChild(s); }
+    window.__tgLoginResolve = onLogin;
+    return ()=>{ window.__tgLoginResolve = null; };
+  },[]);
+  return(
+    <div style={{display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh',flexDirection:'column',gap:28}}>
+      <div style={{textAlign:'center',marginBottom:8}}>
+        <div style={{width:56,height:56,borderRadius:16,background:`linear-gradient(135deg,${theme.primary},${theme.secondary})`,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'Nunito,sans-serif',fontWeight:900,fontSize:28,color:'#fff',margin:'0 auto 16px',boxShadow:`0 4px 20px ${theme.primary}44`}}>K</div>
+        <div style={{fontFamily:'Nunito,sans-serif',fontWeight:800,fontSize:22,color:dp.text}}>Kurtex CRM</div>
+        <div style={{fontSize:13,color:dp.textMuted,marginTop:6}}>Sign in with your Telegram account</div>
+      </div>
+      <div style={{background:dp.cardBg,border:`1px solid ${dp.border}`,borderRadius:16,padding:'28px 32px',display:'flex',flexDirection:'column',alignItems:'center',gap:16,boxShadow:'0 4px 24px rgba(0,0,0,.08)'}}>
+        <div style={{fontSize:13,color:dp.textMuted,marginBottom:4}}>Only authorized team members can access this dashboard.</div>
+        <div ref={ref}/>
+      </div>
+    </div>
+  );
+}
+
+function App(){
+  const [session, setSession] = React.useState(getSession);
+  const theme_=THEMES[TWEAK_DEFAULTS.accent]||THEMES.darkblue;
+  const dp_ = getPalette(!!TWEAK_DEFAULTS.darkMode);
+
+  if(!session || Date.now()/1000 > (session.expires||0)){
+    return <LoginScreen onLogin={s=>{saveSession(s);setSession(s);}} dp={dp_} theme={theme_}/>;
+  }
+
+  const {cases: liveCases, loading, error} = useCases();
+  const cases = liveCases.length > 0 ? liveCases : seed;
+  const saved=JSON.parse(localStorage.getItem('kurtex_state')||'{}');
+  const [page,setPage]=useState(saved.page||'dashboard');
+  const [selectedCase,setSelectedCase]=useState(null);
+  const [sidebarCollapsed,setSidebarCollapsed]=useState(false);
+  const [tweaks,setTweaks]=useState({...TWEAK_DEFAULTS,...(JSON.parse(localStorage.getItem('kurtex_tweaks')||'{}'))});
+  const [tweaksVisible,setTweaksVisible]=useState(false);
+  const [mobile,setMobile]=useState(window.innerWidth<768);
+
+  useEffect(()=>{const fn=()=>setMobile(window.innerWidth<768);window.addEventListener('resize',fn);return()=>window.removeEventListener('resize',fn);},[]);
+  useEffect(()=>{localStorage.setItem('kurtex_state',JSON.stringify({page}));},[page]);
+  useEffect(()=>{
+    localStorage.setItem('kurtex_tweaks',JSON.stringify(tweaks));
+    window.parent.postMessage({type:'__edit_mode_set_keys',edits:tweaks},'*');
+  },[tweaks]);
+  useEffect(()=>{
+    window.addEventListener('message',e=>{
+      if(e.data?.type==='__activate_edit_mode')setTweaksVisible(true);
+      if(e.data?.type==='__deactivate_edit_mode')setTweaksVisible(false);
+    });
+    window.parent.postMessage({type:'__edit_mode_available'},'*');
+  },[]);
+
+  const theme=THEMES[tweaks.accent]||THEMES.violet;
+  const dark=!!tweaks.darkMode;
+  const dp=getPalette(dark);
+  const cardStyle=tweaks.cardStyle||'elevated';
+
+  // update body bg
+  const [clock,setClock]=useState('');
+  useEffect(()=>{
+    const tick=()=>setClock(new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'}));
+    tick();
+    const id=setInterval(tick,1000);
+    return()=>clearInterval(id);
+  },[]);
+
+  useEffect(()=>{
+    document.body.style.background=dp.pageBg;
+    document.body.style.color=dp.text;
+  },[dark]);
+
+  const renderPage=()=>{
+    switch(page){
+      case 'dashboard': return <Dashboard cases={cases} theme={theme} cardStyle={cardStyle} dp={dp} onViewCase={setSelectedCase}/>;
+      case 'cases':     return <CasesList cases={cases} theme={theme} cardStyle={cardStyle} dp={dp} onViewCase={setSelectedCase}/>;
+      case 'alerts':    return <AlertsFeed cases={cases} theme={theme} cardStyle={cardStyle} dp={dp} onViewCase={setSelectedCase}/>;
+      case 'missed':    return <MissedAlerts cases={cases} theme={theme} cardStyle={cardStyle} dp={dp} onViewCase={setSelectedCase}/>;
+      case 'reports':   return <Reports cases={cases} theme={theme} cardStyle={cardStyle} dp={dp}/>;
+      case 'settings':  return <Settings theme={theme} cardStyle={cardStyle} dp={dp} tweaks={tweaks} setTweaks={setTweaks}/>;
+      default: return null;
+    }
+  };
+
+  return(
+    <div style={{display:'flex',height:'100vh',overflow:'hidden',color:dp.text,position:'relative'}}>
+      {/* Full-screen background photo */}
+      <div style={{position:'fixed',inset:0,zIndex:0,pointerEvents:'none'}}>
+        <img src={BG_PHOTO} alt="" style={{width:'100%',height:'100%',objectFit:'cover',objectPosition:'center'}}/>
+        <div style={{position:'absolute',inset:0,background:dark?'rgba(8,12,24,.88)':'rgba(240,244,250,.91)'}}/>
+        <div style={{position:'absolute',inset:0,backgroundImage:dark?`radial-gradient(${dp.border} 1px,transparent 1px)`:`radial-gradient(#00000008 1px,transparent 1px)`,backgroundSize:'22px 22px'}}/>
+      </div>
+      {!mobile&&<Sidebar page={page} setPage={setPage} theme={theme} dp={dp} collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed}/>}
+      <div style={{flex:1,overflow:'auto',display:'flex',flexDirection:'column',position:'relative',zIndex:1}}>
+        <div style={{background:dark?'rgba(17,24,39,.75)':'rgba(255,255,255,.75)',borderBottom:`1px solid ${dp.border}`,padding:'0 24px',height:58,display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0,position:'sticky',top:0,zIndex:20,backdropFilter:'blur(18px)',WebkitBackdropFilter:'blur(18px)'}}>
+          <div style={{display:'flex',alignItems:'center',gap:12}}>
+            {mobile&&<div style={{width:32,height:32,borderRadius:9,background:theme.primary,display:'flex',alignItems:'center',justifyContent:'center',boxShadow:`0 2px 8px ${theme.primary}55`,fontFamily:'Nunito,sans-serif',fontWeight:900,fontSize:17,color:'#fff'}}>
+              K
+            </div>}
+            {mobile&&<span className="syne" style={{fontWeight:800,fontSize:15,color:dp.text}}>Kurtex</span>}
+            {!mobile&&<div style={{display:'flex',alignItems:'center',gap:8}}>
+              <div style={{width:6,height:6,borderRadius:99,background:dp.borderMed}}/>
+              <span style={{fontSize:13,color:dp.textMuted,fontWeight:600}}>{NAV.find(n=>n.k===page)?.l}</span>
+            </div>}
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:14}}>
+            {!mobile&&<div style={{fontSize:12,fontFamily:'monospace',color:dp.textFaint,letterSpacing:.5,background:dp.inputBg,padding:'4px 10px',borderRadius:7,border:`1px solid ${dp.border}`}}>{clock}</div>}
+            <div style={{display:'flex',alignItems:'center',gap:7,padding:'5px 12px',borderRadius:20,background:dark?'#10b98118':'#10b98112',border:'1px solid #10b98133'}}>
+              <span className="live-dot" style={{width:7,height:7,borderRadius:99,background:'#10B981',display:'block',color:'#10B981'}}/>
+              <span style={{fontSize:12,color:'#10B981',fontWeight:700}}>Live</span>
+            </div>
+            <div style={{display:'flex',alignItems:'center',gap:8}}>
+              <div style={{fontSize:12,color:dp.textMuted,fontWeight:600}}>{session.name}</div>
+              <div onClick={async()=>{await apiFetch('/logout',{method:'POST'});clearSession();setSession(null);}} style={{width:34,height:34,borderRadius:10,background:`linear-gradient(135deg,${theme.primary},${theme.secondary})`,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:12,color:'#fff',boxShadow:`0 2px 8px ${theme.primary}44`,fontFamily:'Nunito,sans-serif',cursor:'pointer',title:'Sign out'}}>
+                {(session.name||'?')[0].toUpperCase()}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style={{flex:1,padding:mobile?'16px 16px 80px':'28px 36px',overflowY:'auto'}}>
+          <div className="fade-up" key={page}>{renderPage()}</div>
+        </div>
+      </div>
+      {mobile&&<BottomNav page={page} setPage={setPage} theme={theme} dp={dp}/>}
+      {selectedCase&&<CasePanel c={selectedCase} theme={theme} dp={dp} onClose={()=>setSelectedCase(null)}/>}
+      <TweaksPanel tweaks={tweaks} setTweaks={setTweaks} visible={tweaksVisible} dp={dp} theme={theme}/>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
